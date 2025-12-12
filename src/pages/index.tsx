@@ -3,170 +3,43 @@ import { Inter } from "next/font/google";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
-  DrawerClose,
   DrawerContent,
   DrawerDescription,
-  DrawerFooter,
   DrawerHeader,
   DrawerTitle,
   DrawerTrigger,
-} from "@/components/ui/drawer"
-import { Skeleton } from "@/components/ui/skeleton"
-import { isInstalled, getPublicKey, signMessage } from "@gemwallet/api";
-import sdk from "@crossmarkio/sdk";
-import {useCookies} from "react-cookie";
-
-import { useEffect, useState } from "react";
+} from "@/components/ui/drawer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useWallet } from "@/hooks/useWallet";
+import { useState, useEffect } from "react";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export default function Home() {
-  const [qrcode, setQrcode] = useState<string>("");
-  const [jumpLink, setJumpLink] = useState<string>("");
-  const [xrpAddress, setXrpAddress] = useState<string>("");
-  const [isMobile, setIsMobile] = useState<boolean>(false);
-  const [cookies, setCookie, removeCookie] = useCookies(["jwt"]);
   const [enableJwt, setEnableJwt] = useState<boolean>(false);
-  const [retrieved, setRetrieved] = useState<boolean>(false);
+  const [isMobile, setIsMobile] = useState<boolean>(false);
+
+  const {
+    xrpAddress,
+    isLoading,
+    error,
+    xummQrCode,
+    xummJumpLink,
+    connectXUMM,
+    connectGEM,
+    connectCrossmark,
+    disconnect,
+    isRetrieved,
+  } = useWallet(enableJwt);
 
   useEffect(() => {
-    if (window.innerWidth < 768) {
-      setIsMobile(true);
-    }
-
-    if (cookies.jwt !== undefined && cookies.jwt !== null) {
-      const url = "/api/auth";
-      fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ token: cookies.jwt }),
-      })
-        .then((response) => response.json())
-        .then((data) => {
-          if (data.hasOwnProperty("xrpAddress")) {
-            setXrpAddress(data.xrpAddress);
-            setRetrieved(true);
-          }
-        });
-    }
-  }, []);
-
-  const getQrCode = async () => {
-    const payload = await fetch("/api/auth/xumm/createpayload");
-    const data = await payload.json();
-
-    setQrcode(data.payload.refs.qr_png);
-    setJumpLink(data.payload.next.always);
-
-    if (isMobile) {
-      //open in new tab
-      window.open(data.payload.next.always, "_blank");
-    }
-
-    const ws = new WebSocket(data.payload.refs.websocket_status);
-
-    ws.onmessage = async (e) => {
-      let responseObj = JSON.parse(e.data);
-      if (responseObj.signed !== null && responseObj.signed !== undefined) {
-        const payload = await fetch(
-          `/api/auth/xumm/getpayload?payloadId=${responseObj.payload_uuidv4}`
-        );
-        const payloadJson = await payload.json();
-
-        const hex = payloadJson.payload.response.hex;
-        const checkSign = await fetch(`/api/auth/xumm/checksign?hex=${hex}`);
-        const checkSignJson = await checkSign.json();
-        setXrpAddress(checkSignJson.xrpAddress)
-        if (enableJwt) {
-          setCookie("jwt", checkSignJson.token, { path: "/" });
-        }
-      } else {
-        console.log(responseObj);
-      }
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768);
     };
-  };
-
-  const handleConnectGem = () => {
-    isInstalled().then((response) => {
-      if (response.result.isInstalled) {
-        getPublicKey().then((response) => {
-          // console.log(`${response.result?.address} - ${response.result?.publicKey}`);
-          const pubkey = response.result?.publicKey;
-          //fetch nonce from /api/gem/nonce?pubkey=pubkey
-          fetch(
-            `/api/auth/gem/nonce?pubkey=${pubkey}&address=${response.result?.address}`
-          )
-            .then((response) => response.json())
-            .then((data) => {
-              const nonceToken = data.token;
-              const opts = {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${nonceToken}`,
-                },
-              };
-              signMessage(nonceToken).then((response) => {
-                const signedMessage = response.result?.signedMessage;
-                if (signedMessage !== undefined) {
-                  //post at /api/gem/checksign?signature=signature
-                  fetch(`/api/auth/gem/checksign?signature=${signedMessage}`, opts)
-                    .then((response) => response.json())
-                    .then((data) => {
-                      const { token, address } = data;
-                      if (token === undefined) {
-                        console.log("error");
-                        return;
-                      }
-                      setXrpAddress(address);
-                      if (enableJwt) {
-                        setCookie("jwt", token, { path: "/" });
-                      }
-                    });
-                }
-              });
-            });
-        });
-      }
-    });
-  };
-
-  const handleConnectCrossmark = async () => {
-    //sign in first, then generate nonce
-    const hashUrl = "/api/auth/crossmark/hash";
-    const hashR = await fetch(hashUrl);
-    const hashJson = await hashR.json();
-    const hash = hashJson.hash;
-    const id = await sdk.methods.signInAndWait(hash)
-    console.log(id);
-    const address = id.response.data.address;
-    const pubkey = id.response.data.publicKey;
-    const signature = id.response.data.signature;
-    const checkSign = await fetch(
-      `/api/auth/crossmark/checksign?signature=${signature}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${hash}`,
-        },
-        body: JSON.stringify({
-          pubkey: pubkey,
-          address: address,
-        }),
-      }
-    );
-
-    const checkSignJson = await checkSign.json();
-    if (checkSignJson.hasOwnProperty("token")) {
-      setXrpAddress(address);
-      if (enableJwt) {
-        setCookie("jwt", checkSignJson.token, { path: "/" });
-      }
-    }
-  };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
 
   return (
     <main
@@ -194,34 +67,46 @@ export default function Home() {
           />
           <span>Crafted by Aaditya (A.K.A Ghost!)</span>
         </a>
-        <Drawer>
+        {error && (
+          <div className="mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+            <p className="font-semibold">Error:</p>
+            <p>{error}</p>
+          </div>
+        )}
 
-          <DrawerTrigger className="mt-8 bg-blue-500 hover:bg-blue-600 w-48 h-12 rounded-lg text-white" onClick={getQrCode}>
-            Connect with XAMAN
+        <Drawer>
+          <DrawerTrigger
+            className="mt-8 bg-blue-500 hover:bg-blue-600 w-48 h-12 rounded-lg text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={connectXUMM}
+            disabled={isLoading}
+          >
+            {isLoading ? "Connecting..." : "Connect with XAMAN"}
           </DrawerTrigger>
           <DrawerContent className="bg-white p-4">
             <DrawerHeader className="flex flex-col items-center">
-              <DrawerTitle>Scann this qr code to sign in with xaman!</DrawerTitle>
+              <DrawerTitle>Scan this QR code to sign in with Xaman!</DrawerTitle>
             </DrawerHeader>
             <DrawerDescription className="flex flex-col items-center">
-              {
-                qrcode !== "" ? (
-                  <Image
-                    src={qrcode}
-                    alt="xaman qr code"
-                    width={200}
-                    height={200}
-                  />
-                ) : (
-                  <div className="flex flex-col space-y-3">
-                    <Skeleton className="h-[250px] w-[250px] rounded-xl bg-gray-300" />
-                  </div>
-                )
-              }
-              {jumpLink !== "" && (
-                <Button className="mt-2 bg-blue-400 hover:bg-blue-500 w-48 h-12" onClick={() => {
-                  window.open(jumpLink, "_blank");
-                }}>
+              {xummQrCode !== "" ? (
+                <Image
+                  src={xummQrCode}
+                  alt="Xaman QR code"
+                  width={200}
+                  height={200}
+                  priority
+                />
+              ) : (
+                <div className="flex flex-col space-y-3">
+                  <Skeleton className="h-[250px] w-[250px] rounded-xl bg-gray-300" />
+                </div>
+              )}
+              {xummJumpLink !== "" && (
+                <Button
+                  className="mt-2 bg-blue-400 hover:bg-blue-500 w-48 h-12"
+                  onClick={() => {
+                    window.open(xummJumpLink, "_blank");
+                  }}
+                >
                   Open in Xaman
                 </Button>
               )}
@@ -230,17 +115,19 @@ export default function Home() {
         </Drawer>
 
         <Button
-          className="mt-2 bg-blue-400 hover:bg-blue-500 w-48 h-12"
-          onClick={handleConnectGem}
+          className="mt-2 bg-blue-400 hover:bg-blue-500 w-48 h-12 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={connectGEM}
+          disabled={isLoading}
         >
-          Connect with GEM
+          {isLoading ? "Connecting..." : "Connect with GEM"}
         </Button>
 
         <Button
-          className="mt-2 bg-orange-500 hover:bg-orange-600 w-48 h-12"
-          onClick={handleConnectCrossmark}
+          className="mt-2 bg-orange-500 hover:bg-orange-600 w-48 h-12 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={connectCrossmark}
+          disabled={isLoading}
         >
-          Connect with Crossmark
+          {isLoading ? "Connecting..." : "Connect with Crossmark"}
         </Button>
 
         <div className="mt-2">
@@ -258,18 +145,32 @@ export default function Home() {
 
         <div className="mt-8">
           {xrpAddress !== "" && (
-            <p className="text-center">
-              Your XRP address is: <a className="font-bold" href={`https://bithomp.com/explorer/${xrpAddress}`}>{xrpAddress.slice(0, 3)}...{xrpAddress.slice(-3)}</a>{" "}
-              {retrieved && (
-                <span className="text-red-500 underline" onClick={() => {
-                  removeCookie("jwt");
-                  setRetrieved(false);
-                  setXrpAddress("");
-                }}>
-                  (Retrieved from cookies, click to remove)
-                </span>
+            <div className="text-center">
+              <p>
+                Your XRP address is:{" "}
+                <a
+                  className="font-bold text-blue-600 hover:text-blue-800 underline"
+                  href={`https://bithomp.com/explorer/${xrpAddress}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {xrpAddress.slice(0, 3)}...{xrpAddress.slice(-3)}
+                </a>
+              </p>
+              {isRetrieved && (
+                <p className="mt-2">
+                  <span className="text-sm text-gray-600">
+                    (Retrieved from cookies)
+                  </span>
+                </p>
               )}
-            </p>
+              <Button
+                className="mt-4 bg-red-500 hover:bg-red-600 w-48 h-10"
+                onClick={disconnect}
+              >
+                Disconnect
+              </Button>
+            </div>
           )}
         </div>
 
